@@ -57,7 +57,14 @@ class DataCleaner:
             pd.DataFrame([asdict(t) for t in self.dataset.tropes]).to_excel(writer, sheet_name="tropes", index=False)
 
     def _persist_with_conn(self, conn: sqlite3.Connection) -> None:
-        pd.DataFrame([asdict(e) for e in self.dataset.episodes]).to_sql("episodes", conn, if_exists="replace", index=False)
-        pd.DataFrame([asdict(c) for c in self.dataset.characters]).to_sql("characters", conn, if_exists="replace", index=False)
-        pd.DataFrame([asdict(a) for a in self.dataset.arcs]).to_sql("arcs", conn, if_exists="replace", index=False)
-        pd.DataFrame([asdict(t) for t in self.dataset.tropes]).to_sql("tropes", conn, if_exists="replace", index=False)
+        self._persist_table([asdict(e) for e in self.dataset.episodes], "episodes", conn)
+        self._persist_table([asdict(c) for c in self.dataset.characters], "characters", conn)
+        self._persist_table([asdict(a) for a in self.dataset.arcs], "arcs", conn)
+        self._persist_table([asdict(t) for t in self.dataset.tropes], "tropes", conn)
+
+    def _persist_table(self, rows: Iterable[dict], table: str, conn: sqlite3.Connection) -> None:
+        df = pd.DataFrame(rows)
+        if df.empty or len(df.columns) == 0:
+            logger.warning("Skipping %s — no data available", table)
+            return
+        df.to_sql(table, conn, if_exists="replace", index=False)
