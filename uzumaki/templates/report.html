@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; }
+    h1, h2, h3 { color: #cc3300; }
+    .summary ul { list-style: square; }
+    img { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  <section class="summary">
+    <h2>Executive Summary</h2>
+    <ul>
+      {% for bullet in executive_summary %}
+      <li>{{ bullet }}</li>
+      {% else %}
+      <li>No hay hallazgos todavía. Ejecuta el pipeline para generarlos.</li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section>
+    <h2>Balance de Personajes</h2>
+    {% if character_balance_plot %}
+      <img src="{{ character_balance_plot }}" alt="Balance de personajes" />
+    {% endif %}
+    <ul>
+      {% for name, percentage in character_balance.items() %}
+        <li>{{ name }}: {{ percentage | round(2) }}%</li>
+      {% else %}
+        <li>Sin datos de personajes.</li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section>
+    <h2>Pacing por Arco</h2>
+    <ul>
+      {% for arc_name, pacing in pacing_scores %}
+        <li>{{ arc_name }}: {{ pacing if pacing is not none else 'N/A' }}</li>
+      {% else %}
+        <li>Sin datos de pacing.</li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section>
+    <h2>Tropos Sobreutilizados</h2>
+    <ol>
+      {% for trope, freq, category in overused_tropes %}
+        <li>{{ trope }} ({{ category }}): {{ freq }}</li>
+      {% else %}
+        <li>Sin tropos detectados.</li>
+      {% endfor %}
+    </ol>
+  </section>
+
+  <section>
+    <h2>Satisfacción por Arco</h2>
+    {% if arc_satisfaction_plot %}
+      <img src="{{ arc_satisfaction_plot }}" alt="Satisfacción por arco" />
+    {% else %}
+      <p>Genera ratings para ver la gráfica.</p>
+    {% endif %}
+  </section>
+</body>
+</html>
