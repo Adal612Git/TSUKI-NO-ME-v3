@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from dataclasses import asdict
+from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
 
+from .cleaning import deduplicate_by, ensure_columns
 from .models import CharacterPopularity, CleanedDataset, EpisodeRating, StoryArc, Trope
+from .storage import ExcelSnapshot, SQLiteWriter
 
 logger = logging.getLogger(__name__)
 
@@ -20,51 +22,71 @@ class DataCleaner:
         self.dataset = CleanedDataset()
 
     def add_characters(self, characters: Iterable[CharacterPopularity]) -> None:
-        uniques: dict[str, CharacterPopularity] = {c.name: c for c in characters}
-        self.dataset.characters = list(uniques.values())
+        uniques = deduplicate_by(characters, lambda c: c.name.lower())
+        self.dataset.characters = uniques
         logger.debug("Characters normalized: %s", [asdict(c) for c in self.dataset.characters])
 
     def add_episodes(self, episodes: Iterable[EpisodeRating]) -> None:
-        seen = {(e.season, e.episode) for e in self.dataset.episodes}
-        for episode in episodes:
-            if (episode.season, episode.episode) not in seen:
-                self.dataset.episodes.append(episode)
-        self.dataset.episodes.sort(key=lambda e: (e.season, e.episode))
+        uniques = deduplicate_by(episodes, lambda e: (e.season, e.episode))
+        self.dataset.episodes = sorted(uniques, key=lambda e: (e.season, e.episode))
         logger.debug("Episodes normalized: %s", [asdict(e) for e in self.dataset.episodes])
 
     def add_arcs(self, arcs: Iterable[StoryArc]) -> None:
-        self.dataset.arcs = list({a.name: a for a in arcs}.values())
+        self.dataset.arcs = deduplicate_by(arcs, lambda a: a.name.lower())
         logger.debug("Arcs normalized: %s", [asdict(a) for a in self.dataset.arcs])
 
     def add_tropes(self, tropes: Iterable[Trope]) -> None:
-        self.dataset.tropes = list({(t.category, t.name): t for t in tropes}.values())
+        self.dataset.tropes = deduplicate_by(tropes, lambda t: (t.category.lower(), t.name.lower()))
         logger.debug("Tropes normalized: %s", [asdict(t) for t in self.dataset.tropes])
 
     def to_sqlite(self, path: str) -> None:
         logger.info("Persisting cleaned dataset to %s", path)
-        conn = sqlite3.connect(path)
-        try:
-            self._persist_with_conn(conn)
-        finally:
-            conn.close()
+        writer = SQLiteWriter(path)
+        tables = {
+            "episodes": ([asdict(e) for e in self.dataset.episodes], EpisodeRating.__dataclass_fields__.keys()),
+            "characters": ([asdict(c) for c in self.dataset.characters], CharacterPopularity.__dataclass_fields__.keys()),
+            "arcs": ([asdict(a) for a in self.dataset.arcs], StoryArc.__dataclass_fields__.keys()),
+            "tropes": ([asdict(t) for t in self.dataset.tropes], Trope.__dataclass_fields__.keys()),
+        }
+        writer.write_dataset({name: (rows, list(columns)) for name, (rows, columns) in tables.items()})
 
     def snapshot_to_excel(self, path: str) -> None:
         logger.info("Persisting cleaned dataset snapshot to %s", path)
-        with pd.ExcelWriter(path, engine="openpyxl") as writer:
-            pd.DataFrame([asdict(e) for e in self.dataset.episodes]).to_excel(writer, sheet_name="episodes", index=False)
-            pd.DataFrame([asdict(c) for c in self.dataset.characters]).to_excel(writer, sheet_name="characters", index=False)
-            pd.DataFrame([asdict(a) for a in self.dataset.arcs]).to_excel(writer, sheet_name="arcs", index=False)
-            pd.DataFrame([asdict(t) for t in self.dataset.tropes]).to_excel(writer, sheet_name="tropes", index=False)
+        snapshot = ExcelSnapshot(path)
+        snapshot.write_workbook(
+            {
+                "episodes": [asdict(e) for e in self.dataset.episodes],
+                "characters": [asdict(c) for c in self.dataset.characters],
+                "arcs": [asdict(a) for a in self.dataset.arcs],
+                "tropes": [asdict(t) for t in self.dataset.tropes],
+            }
+        )
 
-    def _persist_with_conn(self, conn: sqlite3.Connection) -> None:
-        self._persist_table([asdict(e) for e in self.dataset.episodes], "episodes", conn)
-        self._persist_table([asdict(c) for c in self.dataset.characters], "characters", conn)
-        self._persist_table([asdict(a) for a in self.dataset.arcs], "arcs", conn)
-        self._persist_table([asdict(t) for t in self.dataset.tropes], "tropes", conn)
+    def snapshot_to_parquet(self, directory: str) -> None:
+        base = Path(directory)
+        base.mkdir(exist_ok=True, parents=True)
+        datasets = {
+            "episodes": [asdict(e) for e in self.dataset.episodes],
+            "characters": [asdict(c) for c in self.dataset.characters],
+            "arcs": [asdict(a) for a in self.dataset.arcs],
+            "tropes": [asdict(t) for t in self.dataset.tropes],
+        }
+        for name, rows in datasets.items():
+            df = pd.DataFrame(rows)
+            if df.empty:
+                logger.warning("Skipping %s.parquet — no rows to persist", name)
+                continue
+            expected = self._expected_columns(name)
+            df = ensure_columns(df, expected)
+            path = base / f"{name}.parquet"
+            df.to_parquet(path, index=False)
+            logger.info("Persisted %d rows to %s", len(df), path)
 
-    def _persist_table(self, rows: Iterable[dict], table: str, conn: sqlite3.Connection) -> None:
-        df = pd.DataFrame(rows)
-        if df.empty or len(df.columns) == 0:
-            logger.warning("Skipping %s — no data available", table)
-            return
-        df.to_sql(table, conn, if_exists="replace", index=False)
+    def _expected_columns(self, name: str) -> list[str]:
+        mapping = {
+            "episodes": list(EpisodeRating.__dataclass_fields__.keys()),
+            "characters": list(CharacterPopularity.__dataclass_fields__.keys()),
+            "arcs": list(StoryArc.__dataclass_fields__.keys()),
+            "tropes": list(Trope.__dataclass_fields__.keys()),
+        }
+        return mapping.get(name, [])

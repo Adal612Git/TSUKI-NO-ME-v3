@@ -1,11 +1,12 @@
-requests
-cloudscraper
+httpx
 beautifulsoup4
+requests
 tenacity
-selenium
 pandas
 matplotlib
 jinja2
 weasyprint
 lxml
 openpyxl
+imdbpy
+pyarrow
