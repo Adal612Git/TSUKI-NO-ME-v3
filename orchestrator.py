@@ -16,7 +16,7 @@ from uzumaki.metrics import (
 )
 from uzumaki.reporting import HTMLReporter
 from uzumaki.scraping import FandomAPIClient, IMDBApiScraper, MALScraper, TVTropesLiteScraper
-from uzumaki.scraping.base import run_in_executor
+from uzumaki.scraping.base import ScraperError, run_in_executor
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -40,10 +40,10 @@ class Orchestrator:
         imdb = IMDBApiScraper()
 
         async with fandom, tv_tropes:
-            characters_task = run_in_executor(mal.fetch_characters)
-            arcs_task = asyncio.create_task(fandom.fetch_arcs())
-            tropes_task = asyncio.create_task(tv_tropes.fetch())
-            episodes_task = run_in_executor(imdb.fetch_all)
+            characters_task = self._resilient("MAL", run_in_executor(mal.fetch_characters))
+            arcs_task = self._resilient("Fandom", asyncio.create_task(fandom.fetch_arcs()))
+            tropes_task = self._resilient("TVTropes", asyncio.create_task(tv_tropes.fetch()))
+            episodes_task = self._resilient("IMDb", run_in_executor(imdb.fetch_all))
 
             characters, fandom_arcs, tv_tropes_list, episodes = await asyncio.gather(
                 characters_task, arcs_task, tropes_task, episodes_task
@@ -142,6 +142,15 @@ class Orchestrator:
                 + ", ".join(f"{name} ({pct:.1f}%)" for name, pct in top)
             )
         return summary
+
+    async def _resilient(self, name: str, awaitable):
+        try:
+            return await awaitable
+        except ScraperError as exc:
+            logger.warning("%s scraper unavailable (%s); continuing without data", name, exc)
+        except Exception as exc:  # pragma: no cover - defensive logging only
+            logger.exception("%s scraper crashed unexpectedly: %s", name, exc)
+        return []
 
 
 def main() -> None:

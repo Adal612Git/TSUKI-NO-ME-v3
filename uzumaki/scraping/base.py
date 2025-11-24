@@ -32,8 +32,14 @@ class CacheEntry:
 class AsyncCachedClient:
     """Lightweight async HTTP client with ETag/Last-Modified caching."""
 
-    def __init__(self, *, timeout: float = 20.0, headers: dict[str, str] | None = None) -> None:
-        self._client = httpx.AsyncClient(timeout=timeout, headers=headers)
+    def __init__(
+        self,
+        *,
+        timeout: float = 20.0,
+        headers: dict[str, str] | None = None,
+        cookies: httpx.Cookies | dict[str, str] | None = None,
+    ) -> None:
+        self._client = httpx.AsyncClient(timeout=timeout, headers=headers, cookies=cookies)
         self._cache: dict[str, CacheEntry] = {}
 
     async def __aenter__(self) -> "AsyncCachedClient":
@@ -78,8 +84,8 @@ class AsyncCachedClient:
 class BaseAsyncScraper:
     name: str = "scraper"
 
-    def __init__(self) -> None:
-        self.client = AsyncCachedClient()
+    def __init__(self, *, client: AsyncCachedClient | None = None) -> None:
+        self.client = client or AsyncCachedClient()
 
     async def __aenter__(self) -> "BaseAsyncScraper":
         await self.client.__aenter__()
