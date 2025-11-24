@@ -1,4 +1,0 @@
-<BEGIN_DATASET>
-(filename list as provided by user)
-...
-<END_DATASET>

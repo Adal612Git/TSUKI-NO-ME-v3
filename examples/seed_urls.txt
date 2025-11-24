@@ -1,4 +1,0 @@
-# Lista opcional de URLs a scrapear en modo automático.
-# Incluye aquí rutas http(s) con narrativas largas (blogs, fanfics, artículos extensos).
-# Ejemplo:
-# https://www.gutenberg.org/cache/epub/1513/pg1513.html
