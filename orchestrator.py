@@ -1,10 +1,10 @@
 """Master orchestrator for Project Uzumaki."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Iterable
 
 from uzumaki.data_cleaner import DataCleaner
 from uzumaki.metrics import (
@@ -14,12 +14,9 @@ from uzumaki.metrics import (
     flag_filler_arcs,
     identify_overused_tropes,
 )
-from uzumaki.models import CharacterPopularity, EpisodeRating, StoryArc, Trope
-from uzumaki.reporting import ReportGenerator
-from uzumaki.scraping.fandom import FandomScraper
-from uzumaki.scraping.imdb import IMDBScraper
-from uzumaki.scraping.mal import MALScraper
-from uzumaki.scraping.tvtropes import TVTropesScraper
+from uzumaki.reporting import HTMLReporter
+from uzumaki.scraping import FandomAPIClient, IMDBApiScraper, MALScraper, TVTropesLiteScraper
+from uzumaki.scraping.base import run_in_executor
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -30,47 +27,84 @@ class Orchestrator:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.cleaner = DataCleaner()
-        self.reporter = ReportGenerator()
+        self.reporter = HTMLReporter()
 
     def run_scrapers(self) -> None:
-        logger.info("Starting scraper suite")
+        asyncio.run(self._run_scrapers_async())
+
+    async def _run_scrapers_async(self) -> None:
+        logger.info("Starting scraper suite (async)")
         mal = MALScraper()
-        characters = mal.fetch_characters()
-        mal.dump_checkpoint(characters, self.output_dir / "mal_characters.tsv")
-        self.cleaner.add_characters(characters)
+        fandom = FandomAPIClient()
+        tv_tropes = TVTropesLiteScraper()
+        imdb = IMDBApiScraper()
 
-        fandom_arcs = FandomScraper().fetch()
-        self.cleaner.add_arcs(fandom_arcs)
+        async with fandom, tv_tropes:
+            characters_task = run_in_executor(mal.fetch_characters)
+            arcs_task = asyncio.create_task(fandom.fetch_arcs())
+            tropes_task = asyncio.create_task(tv_tropes.fetch())
+            episodes_task = run_in_executor(imdb.fetch_all)
 
-        tv_tropes = TVTropesScraper().fetch()
-        self.cleaner.add_tropes(tv_tropes)
+            characters, fandom_arcs, tv_tropes_list, episodes = await asyncio.gather(
+                characters_task, arcs_task, tropes_task, episodes_task
+            )
 
-        with IMDBScraper() as imdb:
-            episodes = imdb.fetch_all()
-        self.cleaner.add_episodes(episodes)
+        if not characters:
+            logger.warning("MAL scraper returned no characters; downstream metrics may be limited")
+        if not fandom_arcs:
+            logger.warning("Fandom scraper returned no arcs; pacing metrics will be skipped")
+        if not tv_tropes_list:
+            logger.warning("TVTropes scraper returned no tropes; trope analysis will be empty")
+        if not episodes:
+            logger.warning("IMDb scraper returned no episodes; episode metrics will be unavailable")
 
-        # Persist cleaned dataset
-        self.cleaner.to_sqlite(str(self.output_dir / "naruto_analysis.db"))
-        self.cleaner.snapshot_to_excel(str(self.output_dir / "naruto_analysis.xlsx"))
+        if characters:
+            self.cleaner.add_characters(characters)
+        if fandom_arcs:
+            self.cleaner.add_arcs(fandom_arcs)
+        if tv_tropes_list:
+            self.cleaner.add_tropes(tv_tropes_list)
+        if episodes:
+            self.cleaner.add_episodes(episodes)
+
+        self._persist_cleaned_dataset()
+
+    def _persist_cleaned_dataset(self) -> None:
+        # Persist cleaned dataset with resilient writers
+        sqlite_path = self.output_dir / "naruto_analysis.db"
+        excel_path = self.output_dir / "naruto_analysis.xlsx"
+        parquet_dir = self.output_dir / "parquet"
+        self.cleaner.to_sqlite(str(sqlite_path))
+        self.cleaner.snapshot_to_excel(str(excel_path))
+        self.cleaner.snapshot_to_parquet(str(parquet_dir))
 
     def compute_metrics(self) -> dict:
         logger.info("Computing metrics from cleaned dataset")
         dataset = self.cleaner.dataset
-        pacing = {arc.name: calculate_pacing_score(arc) for arc in dataset.arcs}
-        satisfaction = {
-            arc.name: calculate_arc_satisfaction(arc, dataset.episodes)
-            for arc in dataset.arcs
-        }
-        balance = calculate_character_balance(dataset.characters)
-        tropes = identify_overused_tropes(dataset.tropes)
-        filler = flag_filler_arcs(dataset.arcs, dataset.episodes)
-        metrics = {
-            "pacing": pacing,
-            "satisfaction": satisfaction,
-            "character_balance": balance,
-            "overused_tropes": tropes,
-            "filler": [(arc.name, score) for arc, score in filler],
-        }
+        metrics: dict = {}
+
+        if dataset.arcs:
+            pacing = {arc.name: calculate_pacing_score(arc) for arc in dataset.arcs}
+            satisfaction = {
+                arc.name: calculate_arc_satisfaction(arc, dataset.episodes)
+                for arc in dataset.arcs
+            }
+            metrics["pacing"] = pacing
+            metrics["satisfaction"] = satisfaction
+            metrics["filler"] = [(arc.name, score) for arc, score in flag_filler_arcs(dataset.arcs, dataset.episodes)]
+        else:
+            logger.warning("Skipping arc-based metrics: no arcs available")
+
+        if dataset.characters:
+            metrics["character_balance"] = calculate_character_balance(dataset.characters)
+        else:
+            logger.warning("Skipping character balance metric: no characters available")
+
+        if dataset.tropes:
+            metrics["overused_tropes"] = identify_overused_tropes(dataset.tropes)
+        else:
+            logger.warning("Skipping trope analysis: no tropes available")
+
         (self.output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         return metrics
 
