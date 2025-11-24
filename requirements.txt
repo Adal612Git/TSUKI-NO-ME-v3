@@ -1,0 +1,10 @@
+requests
+beautifulsoup4
+tenacity
+selenium
+pandas
+matplotlib
+jinja2
+weasyprint
+lxml
+openpyxl
