@@ -5,29 +5,52 @@ import logging
 from typing import List
 
 import pandas as pd
+import requests
 from bs4 import BeautifulSoup
 
-from .base import respectful_get
 from ..models import StoryArc
 
 logger = logging.getLogger(__name__)
 
 
+FANDOM_URLS = [
+    "https://naruto.fandom.com/wiki/Story_Arcs",
+    "https://naruto.fandom.com/wiki/Category:Story_Arcs",
+    "https://naruto.fandom.com/es/wiki/Arcos_Argumentales",
+]
+
+
 class FandomScraper:
-    url = "https://naruto.fandom.com/wiki/List_of_Story_Arcs"
 
     def fetch(self) -> List[StoryArc]:
         logger.info("Fetching story arcs from Fandom")
-        response = respectful_get(self.url)
 
-        try:
-            frames = pd.read_html(response.text)
-        except (ValueError, ImportError):
-            frames = []
+        for url in FANDOM_URLS:
+            logger.debug("Requesting %s", url)
+            try:
+                response = requests.get(url, timeout=20)
+                if response.status_code == 404:
+                    logger.warning("Fandom URL %s returned 404; skipping without retry", url)
+                    continue
+                response.raise_for_status()
+            except requests.HTTPError as exc:
+                logger.warning("HTTP error fetching %s: %s", url, exc)
+                continue
+            except requests.RequestException as exc:
+                logger.warning("Request error fetching %s: %s", url, exc)
+                continue
 
-        if frames:
-            return self._parse_with_pandas(frames)
-        return self._parse_manually(response.text)
+            try:
+                frames = pd.read_html(response.text)
+            except (ValueError, ImportError):
+                frames = []
+
+            if frames:
+                return self._parse_with_pandas(frames)
+            return self._parse_manually(response.text)
+
+        logger.warning("All Fandom URLs failed; returning empty story arc list")
+        return []
 
     def _parse_with_pandas(self, frames: list[pd.DataFrame]) -> List[StoryArc]:
         arcs: list[StoryArc] = []
