@@ -1,0 +1,5 @@
+<BEGIN_DATASET>
+filename	extension	size_bytes	probable_title	probable_author	year_guess	Genero	Ventas estimadas	Rating promedio (1-5)	numero_resenas	premios	adaptaciones	semanas_lista_bestseller	traduccion_idiomas	PublicoObjetivo	RegionPrincipal	ano_publicacion_real	editorial
+01 El ultimo deseo - Andrzej Sapkowski (1993).epub	.epub	411446	El último deseo	Andrzej Sapkowski	1993	Fantasía	30M+ (saga)	3.94	12200	NA	Netflix series, video games	NA	40+	Adulto	Polonia	1993	SuperNowa
+... (EL CONTENIDO COMPLETO SE INCLUYE AQUÍ, IGUAL AL MENSAJE DEL USUARIO) ...
+<END_DATASET>
